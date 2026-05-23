@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# env & secrets — NEVER commit these
+.env
+.env.*
+!.env.example
+
+# build output
+dist/
+build/
+
+# logs
+*.log
+npm-debug.log*
+
+# prisma local
+prisma/*.db
+prisma/*.db-journal
+
+# editor / OS
+.DS_Store
+.vscode/
+.idea/
+EOF
