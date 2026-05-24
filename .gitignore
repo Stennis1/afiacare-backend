@@ -22,4 +22,3 @@ prisma/*.db-journal
 .DS_Store
 .vscode/
 .idea/
-EOF
