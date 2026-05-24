@@ -1,0 +1,181 @@
+// AfiaCare Prisma schema.
+// See docs/ARCHITECTURE.md §2 for the identity model: phone is first-class and
+// unique so USSD/voice (phone-as-identity) and web (email/password) reconcile
+// to the same User row when the same person appears on both channels.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PATIENT
+  CHW
+  DHO
+  ADMIN
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  EMERGENCY
+}
+
+enum Language {
+  EN
+  TW
+  DAG
+  EE
+}
+
+enum Channel {
+  WEB
+  USSD
+  VOICE
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+enum NotificationChannel {
+  SMS
+  VOICE
+  EMAIL
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String?  @unique
+  passwordHash String?
+  // Nullable because USSD/voice users are created from phone alone — they
+  // never type a name. Web signup still requires it at the zod boundary.
+  fullName     String?
+  phone        String?  @unique
+  role         Role     @default(PATIENT)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  patient            Patient?
+  acknowledgedAlerts Alert[]  @relation("AlertAcknowledgedBy")
+  resolvedAlerts     Alert[]  @relation("AlertResolvedBy")
+}
+
+// Maternal-health profile, separate from auth identity so User stays minimal
+// and clinical fields don't leak into staff accounts (CHW/DHO/ADMIN have no
+// Patient row). 1:1 with User; cascades on user delete.
+model Patient {
+  id                  String    @id @default(cuid())
+  userId              String    @unique
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  district            String?
+  gestationalWeeks    Int?
+  lastMenstrualPeriod DateTime?
+  dueDate             DateTime?
+  parity              Int?
+  gravida             Int?
+  bloodGroup          String?
+
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  riskAssessments RiskAssessment[]
+  alerts          Alert[]
+}
+
+// Persisted result of one risk classification. Append-only audit trail —
+// never updated after creation so the dashboard / clinician can trust the
+// history is exactly what was decided at the time. The reasons[] and
+// language fields are stored so we can re-render or analyze without
+// re-running the rules (which may evolve).
+model RiskAssessment {
+  id             String    @id @default(cuid())
+  patientId      String
+  patient        Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  level          RiskLevel
+  reasons        String[]
+  symptomsJson   Json
+  language       Language
+  recommendation String
+  channel        Channel   @default(WEB)
+  escalate       Boolean   @default(false)
+
+  createdAt      DateTime  @default(now())
+
+  // Set only on HIGH/EMERGENCY — 1:1 with the alert it triggered.
+  alert Alert?
+
+  @@index([patientId, createdAt])
+}
+
+// Dashboard escalation. One Alert per HIGH/EMERGENCY RiskAssessment.
+// State machine: OPEN -> ACKNOWLEDGED -> RESOLVED (resolve from any prior
+// state; ack timestamps backfilled if skipped). Resolved alerts are kept
+// for audit, not deleted.
+model Alert {
+  id               String      @id @default(cuid())
+
+  patientId        String
+  patient          Patient     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  riskAssessmentId String      @unique
+  riskAssessment   RiskAssessment @relation(fields: [riskAssessmentId], references: [id], onDelete: Cascade)
+
+  // Denormalized from RiskAssessment for cheap filter/sort on the dashboard
+  // (no need to join just to bucket by level).
+  level            RiskLevel
+  status           AlertStatus @default(OPEN)
+
+  acknowledgedAt   DateTime?
+  acknowledgedById String?
+  acknowledgedBy   User?       @relation("AlertAcknowledgedBy", fields: [acknowledgedById], references: [id])
+
+  resolvedAt       DateTime?
+  resolvedById     String?
+  resolvedBy       User?       @relation("AlertResolvedBy", fields: [resolvedById], references: [id])
+
+  createdAt        DateTime    @default(now())
+
+  notifications    Notification[]
+
+  @@index([status, createdAt])
+}
+
+// Outbound message log. Phase 1: notification.service.send() writes rows here
+// with status=SENT (simulated). Real Africa's Talking SMS swaps in behind the
+// same send() signature later — no schema change needed.
+model Notification {
+  id        String              @id @default(cuid())
+
+  to        String
+  body      String
+  channel   NotificationChannel @default(SMS)
+  status    NotificationStatus  @default(QUEUED)
+
+  // Most notifications originate from an escalation; some won't (future:
+  // appointment reminders, ANC nudges). Nullable + SetNull on delete so the
+  // notification record survives even if the alert is purged.
+  alertId   String?
+  alert     Alert?              @relation(fields: [alertId], references: [id], onDelete: SetNull)
+
+  error     String?
+  createdAt DateTime            @default(now())
+  sentAt    DateTime?
+
+  @@index([status, createdAt])
+}
