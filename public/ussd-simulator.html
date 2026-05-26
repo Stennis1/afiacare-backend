@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AfiaCare USSD Simulator</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #fff;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+    .phone {
+      width: 100%;
+      max-width: 360px;
+      background: #2a2a3e;
+      border-radius: 1.5rem;
+      padding: 1.25rem;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    }
+    h2 {
+      margin: 0 0 0.5rem;
+      font-size: 1.1rem;
+      text-align: center;
+      color: #6fc;
+    }
+    .subtitle {
+      text-align: center;
+      font-size: 0.75rem;
+      color: #888;
+      margin-bottom: 1rem;
+    }
+    .config {
+      display: grid;
+      grid-template-columns: 5rem 1fr;
+      gap: 0.4rem 0.5rem;
+      margin-bottom: 1rem;
+      font-size: 0.75rem;
+    }
+    .config label { color: #aaa; align-self: center; }
+    .config input {
+      background: #1a1a2e;
+      color: #6fc;
+      border: 1px solid #444;
+      padding: 0.3rem 0.5rem;
+      border-radius: 0.25rem;
+      font-family: monospace;
+      font-size: 0.75rem;
+    }
+    .config input:read-only { color: #888; }
+    .screen {
+      background: #000;
+      color: #6fc;
+      font-family: "SF Mono", Menlo, monospace;
+      padding: 1rem;
+      min-height: 180px;
+      max-height: 250px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      border-radius: 0.5rem;
+      margin-bottom: 1rem;
+      font-size: 0.85rem;
+      line-height: 1.4;
+      border: 2px solid #444;
+    }
+    .screen.end { color: #fc6; border-color: #fc6; }
+    .screen.error { color: #f66; border-color: #f66; }
+    .input-line {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .input-line input {
+      flex: 1;
+      background: #1a1a2e;
+      color: #fff;
+      border: 1px solid #444;
+      padding: 0.5rem;
+      border-radius: 0.25rem;
+      font-family: monospace;
+    }
+    .keypad {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.4rem;
+      margin-bottom: 0.75rem;
+    }
+    .keypad button {
+      padding: 0.9rem;
+      font-size: 1.15rem;
+      background: #3a3a4e;
+      color: #fff;
+      border: none;
+      border-radius: 0.4rem;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .keypad button:hover { background: #4a4a5e; }
+    .keypad button:active { background: #5a5a6e; }
+    .actions { display: flex; gap: 0.5rem; }
+    .actions button {
+      flex: 1;
+      padding: 0.6rem;
+      border: none;
+      border-radius: 0.4rem;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn-dial { background: #2a8c4a; color: #fff; }
+    .btn-dial:hover { background: #3a9c5a; }
+    .btn-hangup { background: #8c2a2a; color: #fff; }
+    .btn-hangup:hover { background: #9c3a3a; }
+    .status {
+      font-size: 0.7rem;
+      color: #888;
+      text-align: center;
+      margin-top: 0.5rem;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="phone">
+    <h2>AfiaCare USSD Simulator</h2>
+    <p class="subtitle">Local development — bypasses Africa's Talking</p>
+
+    <div class="config">
+      <label>Endpoint</label>
+      <input id="endpoint" value="/ussd" />
+      <label>Code</label>
+      <input id="code" value="*928#" />
+      <label>Phone</label>
+      <input id="phone" value="+233244999000" />
+      <label>Session</label>
+      <input id="session" readonly placeholder="(dial to start)" />
+    </div>
+
+    <div id="screen" class="screen">Dial *928# to start</div>
+
+    <div class="keypad">
+      <button onclick="press('1')">1</button>
+      <button onclick="press('2')">2</button>
+      <button onclick="press('3')">3</button>
+      <button onclick="press('4')">4</button>
+      <button onclick="press('5')">5</button>
+      <button onclick="press('6')">6</button>
+      <button onclick="press('7')">7</button>
+      <button onclick="press('8')">8</button>
+      <button onclick="press('9')">9</button>
+      <button onclick="press('*')">*</button>
+      <button onclick="press('0')">0</button>
+      <button onclick="press('#')">#</button>
+    </div>
+
+    <div class="actions">
+      <button class="btn-dial" onclick="dial()">Dial</button>
+      <button class="btn-hangup" onclick="hangup()">Hang Up</button>
+    </div>
+
+    <div id="status" class="status">idle</div>
+  </div>
+
+  <script>
+    var state = { sessionId: '', text: '' };
+
+    function $(id) { return document.getElementById(id); }
+
+    function newSession() {
+      state.sessionId = 'sim-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+      state.text = '';
+      $('session').value = state.sessionId;
+    }
+
+    function setScreen(content, kind) {
+      var el = $('screen');
+      el.textContent = content;
+      el.className = 'screen' + (kind ? ' ' + kind : '');
+    }
+
+    function setStatus(msg) {
+      $('status').textContent = msg;
+    }
+
+    async function post() {
+      var body = new URLSearchParams({
+        sessionId: state.sessionId,
+        serviceCode: $('code').value,
+        phoneNumber: $('phone').value,
+        text: state.text
+      });
+      setStatus('text="' + state.text + '" ...');
+      try {
+        var r = await fetch($('endpoint').value, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body
+        });
+        var t = await r.text();
+        var ended = t.startsWith('END ');
+        // strip the leading CON / END prefix for display so the screen shows
+        // what the user would actually see on the phone.
+        var display = t.replace(/^(CON|END)\s/, '');
+        setScreen(display, ended ? 'end' : '');
+        setStatus(t.split('\n')[0].slice(0, 60) + '  (HTTP ' + r.status + ')');
+        if (ended) {
+          state.sessionId = '';
+          $('session').value = '';
+          state.text = '';
+        }
+      } catch (e) {
+        setScreen('Connection error: ' + e.message, 'error');
+        setStatus('error');
+      }
+    }
+
+    function dial() {
+      newSession();
+      post();
+    }
+
+    function hangup() {
+      state.sessionId = '';
+      state.text = '';
+      $('session').value = '';
+      setScreen('Dial *928# to start');
+      setStatus('idle');
+    }
+
+    function press(d) {
+      if (!state.sessionId) {
+        alert('Press Dial first to start a session.');
+        return;
+      }
+      state.text = state.text ? state.text + '*' + d : d;
+      post();
+    }
+  </script>
+</body>
+</html>
