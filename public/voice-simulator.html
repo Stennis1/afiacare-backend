@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AfiaCare Voice / IVR Simulator</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #fff;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+    .phone {
+      width: 100%;
+      max-width: 420px;
+      background: #2a2a3e;
+      border-radius: 1.5rem;
+      padding: 1.25rem;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    }
+    h2 {
+      margin: 0 0 0.5rem;
+      font-size: 1.1rem;
+      text-align: center;
+      color: #6fc;
+    }
+    .subtitle {
+      text-align: center;
+      font-size: 0.75rem;
+      color: #888;
+      margin-bottom: 1rem;
+    }
+    .config {
+      display: grid;
+      grid-template-columns: 5rem 1fr;
+      gap: 0.4rem 0.5rem;
+      margin-bottom: 1rem;
+      font-size: 0.75rem;
+    }
+    .config label { color: #aaa; align-self: center; }
+    .config input {
+      background: #1a1a2e;
+      color: #6fc;
+      border: 1px solid #444;
+      padding: 0.3rem 0.5rem;
+      border-radius: 0.25rem;
+      font-family: monospace;
+      font-size: 0.75rem;
+    }
+    .config input:read-only { color: #888; }
+    .transcript {
+      background: #000;
+      font-family: "SF Mono", Menlo, monospace;
+      padding: 0.75rem;
+      min-height: 240px;
+      max-height: 320px;
+      overflow-y: auto;
+      border-radius: 0.5rem;
+      margin-bottom: 1rem;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      border: 2px solid #444;
+    }
+    .turn { margin-bottom: 0.6rem; }
+    .turn .who {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #888;
+      margin-bottom: 0.15rem;
+    }
+    .turn.say .body { color: #6fc; }
+    .turn.play .body { color: #c9f; font-style: italic; }
+    .turn.you .body { color: #fff; }
+    .turn.dial .body { color: #fc6; }
+    .turn.end .body { color: #fc6; font-weight: 600; }
+    .turn.error .body { color: #f66; }
+    .keypad {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.4rem;
+      margin-bottom: 0.75rem;
+    }
+    .keypad button {
+      padding: 0.9rem;
+      font-size: 1.15rem;
+      background: #3a3a4e;
+      color: #fff;
+      border: none;
+      border-radius: 0.4rem;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .keypad button:hover:not(:disabled) { background: #4a4a5e; }
+    .keypad button:active:not(:disabled) { background: #5a5a6e; }
+    .keypad button:disabled { opacity: 0.35; cursor: not-allowed; }
+    .actions { display: flex; gap: 0.5rem; }
+    .actions button {
+      flex: 1;
+      padding: 0.6rem;
+      border: none;
+      border-radius: 0.4rem;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn-dial { background: #2a8c4a; color: #fff; }
+    .btn-dial:hover { background: #3a9c5a; }
+    .btn-hangup { background: #8c2a2a; color: #fff; }
+    .btn-hangup:hover { background: #9c3a3a; }
+    .status {
+      font-size: 0.7rem;
+      color: #888;
+      text-align: center;
+      margin-top: 0.5rem;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="phone">
+    <h2>AfiaCare Voice / IVR Simulator</h2>
+    <p class="subtitle">Local development — bypasses Africa's Talking Voice</p>
+
+    <div class="config">
+      <label>Endpoint</label>
+      <input id="endpoint" value="/voice" />
+      <label>Phone</label>
+      <input id="phone" value="+233244111222" />
+      <label>Session</label>
+      <input id="session" readonly placeholder="(call to start)" />
+    </div>
+
+    <div id="transcript" class="transcript">
+      <div class="turn end"><div class="body">Call the voice number to start.</div></div>
+    </div>
+
+    <div class="keypad">
+      <button onclick="press('1')">1</button>
+      <button onclick="press('2')">2</button>
+      <button onclick="press('3')">3</button>
+      <button onclick="press('4')">4</button>
+      <button onclick="press('5')">5</button>
+      <button onclick="press('6')">6</button>
+      <button onclick="press('7')">7</button>
+      <button onclick="press('8')">8</button>
+      <button onclick="press('9')">9</button>
+      <button onclick="press('*')">*</button>
+      <button onclick="press('0')">0</button>
+      <button onclick="press('#')">#</button>
+    </div>
+
+    <div class="actions">
+      <button class="btn-dial" onclick="dial()">Call</button>
+      <button class="btn-hangup" onclick="hangup()">Hang Up</button>
+    </div>
+
+    <div id="status" class="status">idle</div>
+  </div>
+
+  <script>
+    // Mirrors AT's voice round-trip: one HTTP POST per turn, body is form
+    // -encoded with sessionId + callerNumber + dtmf. Server returns XML
+    // which we parse for <Say>/<Play>/<Dial>. Session ends when the
+    // response contains no <GetDigits> (matches AT: no GetDigits = hangup).
+
+    var state = { sessionId: '', live: false };
+
+    function $(id) { return document.getElementById(id); }
+
+    function newSession() {
+      state.sessionId = 'voice-sim-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+      state.live = true;
+      $('session').value = state.sessionId;
+      $('transcript').innerHTML = '';
+    }
+
+    function appendTurn(kind, who, body) {
+      var t = document.createElement('div');
+      t.className = 'turn ' + kind;
+      t.innerHTML = '<div class="who">' + who + '</div><div class="body"></div>';
+      t.querySelector('.body').textContent = body;
+      var pane = $('transcript');
+      pane.appendChild(t);
+      pane.scrollTop = pane.scrollHeight;
+    }
+
+    function setStatus(msg) { $('status').textContent = msg; }
+
+    // Tiny XML reader for the four actions we emit. Uses DOMParser so we
+    // never hand-roll regex over markup. Returns an ordered list of actions
+    // so the transcript reflects what AT would play in order.
+    function parseResponse(xml) {
+      var doc = new DOMParser().parseFromString(xml, 'application/xml');
+      var err = doc.querySelector('parsererror');
+      if (err) return [{ kind: 'error', body: 'XML parse error: ' + xml.slice(0, 200) }];
+      var root = doc.querySelector('Response');
+      if (!root) return [{ kind: 'error', body: 'No <Response> root in: ' + xml.slice(0, 200) }];
+
+      var actions = [];
+      var hasGetDigits = false;
+
+      function walk(node) {
+        for (var i = 0; i < node.children.length; i++) {
+          var child = node.children[i];
+          var tag = child.tagName;
+          if (tag === 'GetDigits') {
+            hasGetDigits = true;
+            walk(child); // unwrap — the prompt is inside
+          } else if (tag === 'Say') {
+            actions.push({ kind: 'say', body: '"' + (child.textContent || '').trim() + '"' });
+          } else if (tag === 'Play') {
+            actions.push({ kind: 'play', body: '(plays clip) ' + child.getAttribute('url') });
+          } else if (tag === 'Dial') {
+            actions.push({ kind: 'dial', body: 'Bridge call -> ' + child.getAttribute('phoneNumbers') });
+          }
+        }
+      }
+      walk(root);
+      return { actions: actions, hasGetDigits: hasGetDigits };
+    }
+
+    async function post(dtmf) {
+      var body = new URLSearchParams({
+        sessionId: state.sessionId,
+        callerNumber: $('phone').value,
+        dtmf: dtmf || ''
+      });
+      setStatus('POST dtmf="' + (dtmf || '') + '" ...');
+      try {
+        var r = await fetch($('endpoint').value, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body
+        });
+        var t = await r.text();
+        var parsed = parseResponse(t);
+        if (Array.isArray(parsed)) {
+          // error shape
+          parsed.forEach(function (a) { appendTurn('error', 'ERROR', a.body); });
+          state.live = false;
+          $('session').value = '';
+          setStatus('error (HTTP ' + r.status + ')');
+          return;
+        }
+        parsed.actions.forEach(function (a) {
+          var who = a.kind === 'say' ? 'IVR (TTS)'
+                  : a.kind === 'play' ? 'IVR (audio clip)'
+                  : a.kind === 'dial' ? 'IVR (bridging live call)'
+                  : 'IVR';
+          appendTurn(a.kind, who, a.body);
+        });
+        if (!parsed.hasGetDigits) {
+          appendTurn('end', '— call ends —', 'no <GetDigits> -> AT hangs up after the last action plays');
+          state.live = false;
+          $('session').value = '';
+        }
+        setStatus('ok (HTTP ' + r.status + ')');
+      } catch (e) {
+        appendTurn('error', 'NETWORK', e.message);
+        setStatus('error');
+      }
+    }
+
+    function dial() {
+      newSession();
+      appendTurn('you', 'you (dial)', '+233 0800-928-XXXX');
+      post('');
+    }
+
+    function hangup() {
+      if (state.live) appendTurn('end', '— you hang up —', '(call ended by caller)');
+      state.live = false;
+      state.sessionId = '';
+      $('session').value = '';
+      setStatus('idle');
+    }
+
+    function press(d) {
+      if (!state.live) {
+        alert('Press Call first to start a session.');
+        return;
+      }
+      appendTurn('you', 'you (press)', d);
+      post(d);
+    }
+  </script>
+</body>
+</html>

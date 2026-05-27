@@ -9,6 +9,7 @@ import { riskRouter } from './routes/risk.routes';
 import { alertRouter } from './routes/alert.routes';
 import { notificationRouter } from './routes/notification.routes';
 import { ussdRouter } from './routes/ussd.routes';
+import { voiceRouter } from './routes/voice.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -36,6 +37,10 @@ export function createApp(): Express {
   // USSD lives at /ussd (no /api prefix) per the §0 deployment diagram.
   // The router mounts its own urlencoded body parser — do NOT add another.
   app.use('/ussd', ussdRouter);
+
+  // Voice lives at /voice for the same reason. Same form-encoded body
+  // shape as USSD, different response format (XML, not CON/END text).
+  app.use('/voice', voiceRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
