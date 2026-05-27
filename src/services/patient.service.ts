@@ -1,6 +1,7 @@
 import { Role, type Patient, type User } from '@prisma/client';
 import { prisma } from '../config/prisma';
 import { ApiError } from '../utils/api-error';
+import { normalizeGhPhone } from '../utils/phone';
 
 // The DTO shape we expose to controllers. Mirrors auth.service.PublicUser
 // (kept local to avoid a cross-service import for what's a one-line shape).
@@ -79,15 +80,21 @@ function toPatientWithUser(user: User & { patient: Patient | null }): PatientWit
  * profile attached so risk assessments always have somewhere to land.
  */
 export async function findOrCreateByPhone(phone: string): Promise<PatientWithUser> {
+  // Normalize to E.164 so "0244111222", "244111222", "233244111222", and
+  // "+233244111222" all reconcile to the same User row. Without this, the
+  // same person dialing USSD vs. signing up on web in two different formats
+  // would create two records and split their medical history.
+  const normalized = normalizeGhPhone(phone);
+
   const existing = await prisma.user.findUnique({
-    where: { phone },
+    where: { phone: normalized },
     include: { patient: true },
   });
   if (existing) return toPatientWithUser(existing);
 
   const created = await prisma.user.create({
     data: {
-      phone,
+      phone: normalized,
       role: Role.PATIENT,
       patient: { create: {} },
     },

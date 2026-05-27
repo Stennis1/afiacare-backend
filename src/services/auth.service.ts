@@ -3,6 +3,7 @@ import { prisma } from '../config/prisma';
 import { hashPassword, verifyPassword } from '../utils/password';
 import { signToken } from '../utils/jwt';
 import { ApiError } from '../utils/api-error';
+import { normalizeGhPhone } from '../utils/phone';
 
 export interface PublicUser {
   id: string;
@@ -37,8 +38,13 @@ export async function register(
   const emailTaken = await prisma.user.findUnique({ where: { email: input.email } });
   if (emailTaken) throw ApiError.conflict('Email already in use');
 
-  if (input.phone) {
-    const phoneTaken = await prisma.user.findUnique({ where: { phone: input.phone } });
+  // Normalize phone to E.164 before the uniqueness check AND the insert so
+  // the DB only ever stores one canonical form. Same helper used by
+  // patient.findOrCreateByPhone — guarantees web signup and USSD/voice
+  // entry reconcile to the same User row.
+  const phone = input.phone ? normalizeGhPhone(input.phone) : undefined;
+  if (phone) {
+    const phoneTaken = await prisma.user.findUnique({ where: { phone } });
     if (phoneTaken) throw ApiError.conflict('Phone already in use');
   }
 
@@ -50,7 +56,7 @@ export async function register(
       email: input.email,
       passwordHash,
       fullName: input.fullName,
-      phone: input.phone,
+      phone,
       role: Role.PATIENT,
     },
   });
