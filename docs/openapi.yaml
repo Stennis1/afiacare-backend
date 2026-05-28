@@ -1,0 +1,809 @@
+openapi: 3.1.0
+info:
+  title: AfiaCare Backend API
+  version: 0.1.0
+  description: |
+    Unified maternal-health backend for AfiaCare (Ghana). One Express API
+    serving three channels over shared services and one PostgreSQL database:
+
+    - **Web** — REST/JSON (this document).
+    - **USSD** — `*928#` via Africa's Talking (`POST /ussd`, `text/plain`).
+    - **Voice / IVR** — Africa's Talking Voice (`POST /voice`, `application/xml`).
+
+    The web REST surface (every path under `/api/...`) is what the Next.js
+    frontend consumes. USSD and voice are AT-facing webhooks — documented
+    here so they can be exercised from Postman without a live AT account.
+
+    ## Authentication
+    All `/api/...` endpoints except `/api/health`, `/api/auth/register`,
+    and `/api/auth/login` require a `Bearer <jwt>` header. Tokens come from
+    register/login and are valid for `JWT_EXPIRES_IN` (default 7 days).
+
+    ## Roles
+    Four roles: `PATIENT`, `CHW`, `DHO`, `ADMIN`. Only PATIENT is obtainable
+    via public signup; CHW/DHO/ADMIN are seeded via `npm run db:seed` (demo
+    password: `afiacare-demo`).
+
+    Demo accounts:
+    - `chw@afiacare.demo` (CHW)
+    - `dho@afiacare.demo` (DHO)
+    - `admin@afiacare.demo` (ADMIN)
+
+    ## Errors
+    Every error returns `{ error: { message, code, details? } }`. Codes:
+    `BAD_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`,
+    `VALIDATION_ERROR`, `INTERNAL`.
+
+servers:
+  - url: http://localhost:4000
+    description: Local dev (npm run dev)
+  - url: https://api.afiacare.example.com
+    description: Cloud (placeholder — replace with your deployed host)
+
+tags:
+  - name: Health
+    description: Liveness probe.
+  - name: Auth
+    description: Register / login / current user.
+  - name: Patients
+    description: Patient profiles (self-managed or staff-viewed).
+  - name: Risk
+    description: Symptom check + rule-based risk classifier.
+  - name: Alerts
+    description: Dashboard alerts raised by HIGH/EMERGENCY assessments.
+  - name: Notifications
+    description: Outbound SMS log (currently simulated).
+  - name: USSD
+    description: Africa's Talking USSD webhook (text/plain).
+  - name: Voice
+    description: Africa's Talking Voice webhook (application/xml).
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      security: []
+      responses:
+        '200':
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, uptime]
+                properties:
+                  status: { type: string, example: ok }
+                  uptime: { type: number, example: 12.345 }
+
+  # ----- Auth -----
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new PATIENT account
+      description: |
+        Public signup. The role is always `PATIENT` — there is no way to
+        request a different role here. CHW/DHO/ADMIN are seeded via
+        `npm run db:seed`. Phone (if supplied) is normalized to E.164.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterBody'
+            examples:
+              akosua:
+                value:
+                  email: akosua@example.com
+                  password: Pregnant1!
+                  fullName: Akosua Mensah
+                  phone: '+233244111222'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSuccess'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with email + password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginBody'
+            examples:
+              chw:
+                value:
+                  email: chw@afiacare.demo
+                  password: afiacare-demo
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSuccess'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user (verifies token)
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user]
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ----- Patients -----
+  /api/patients:
+    post:
+      tags: [Patients]
+      summary: Upsert own patient profile
+      description: |
+        **PATIENT only.** Partial updates are supported — undefined fields
+        leave existing values untouched (POST-as-PATCH semantics).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertPatientBody'
+            examples:
+              minimal:
+                value:
+                  district: Greater Accra
+                  gestationalWeeks: 28
+                  bloodGroup: O+
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [profile]
+                properties:
+                  profile: { $ref: '#/components/schemas/PatientProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    get:
+      tags: [Patients]
+      summary: List all patients
+      description: '**CHW / DHO / ADMIN only.**'
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [patients]
+                properties:
+                  patients:
+                    type: array
+                    items: { $ref: '#/components/schemas/PatientWithUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/patients/{id}:
+    get:
+      tags: [Patients]
+      summary: Get one patient (by User.id)
+      description: |
+        Accessible by the patient themselves OR by CHW/ADMIN. **DHO is
+        deliberately excluded** — they get aggregates (list), not records.
+        The `id` is the User.id, not the Patient.id.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+          description: User.id of the patient.
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatientWithUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ----- Risk -----
+  /api/risk/check:
+    post:
+      tags: [Risk]
+      summary: Run the symptom classifier (+ persist + maybe escalate)
+      description: |
+        Deterministic rule-based classifier. Returns a `RiskResult` and,
+        as a side effect, persists a `RiskAssessment` and (if HIGH or
+        EMERGENCY) raises an `Alert` + queues SMS to every phone in
+        `ESCALATION_CHW_PHONES`.
+
+        **PATIENT** always acts on self — any `patientId` in the body is
+        ignored. **CHW / ADMIN** must supply `patientId` (the Patient.id,
+        not User.id). DHO has no access.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RiskCheckBody' }
+            examples:
+              patientSelf:
+                summary: Patient checking self (no patientId)
+                value:
+                  symptoms:
+                    severeHeadache: true
+                    lang: en
+              chwOnBehalf:
+                summary: CHW assessing a named patient
+                value:
+                  patientId: cmpmvm4rb0002dew9nqkv9dng
+                  symptoms:
+                    convulsions: true
+                    lang: en
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RiskResult' }
+              examples:
+                emergency:
+                  value:
+                    level: EMERGENCY
+                    reasons: [CONVULSIONS]
+                    recommendation: 'This may be a life-threatening emergency. Please go to a hospital immediately. A health worker has been alerted.'
+                    escalate: true
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ----- Alerts -----
+  /api/alerts:
+    get:
+      tags: [Alerts]
+      summary: List dashboard alerts
+      description: |
+        Default filter is "needs attention" (`OPEN` + `ACKNOWLEDGED`).
+        Pass `status` to scope tighter. Ordering: EMERGENCY first, then
+        newest. **CHW / DHO / ADMIN.**
+      parameters:
+        - in: query
+          name: status
+          required: false
+          schema:
+            $ref: '#/components/schemas/AlertStatus'
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [alerts]
+                properties:
+                  alerts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Alert' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/alerts/{id}:
+    patch:
+      tags: [Alerts]
+      summary: Acknowledge or resolve an alert
+      description: |
+        State machine: `OPEN → ACKNOWLEDGED → RESOLVED`. Resolving without
+        a prior acknowledge backfills `acknowledgedAt`/`acknowledgedById`
+        with the resolver's identity so the audit trail isn't sparse.
+        **CHW / ADMIN only** — DHO is read-only.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatchAlertBody' }
+            examples:
+              ack:
+                value: { action: acknowledge }
+              resolve:
+                value: { action: resolve }
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [alert]
+                properties:
+                  alert: { $ref: '#/components/schemas/Alert' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ----- Notifications -----
+  /api/notifications:
+    get:
+      tags: [Notifications]
+      summary: List recent outbound notifications
+      description: |
+        Dashboard panel for "what went out." Today notifications are
+        simulated (a log line + a row); the real Africa's Talking SMS
+        swap is internal to `notification.service.send`.
+        **CHW / DHO / ADMIN.**
+      parameters:
+        - in: query
+          name: status
+          schema: { $ref: '#/components/schemas/NotificationStatus' }
+        - in: query
+          name: alertId
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notifications]
+                properties:
+                  notifications:
+                    type: array
+                    items: { $ref: '#/components/schemas/Notification' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ----- USSD (webhook) -----
+  /ussd:
+    post:
+      tags: [USSD]
+      summary: Africa's Talking USSD callback
+      description: |
+        **Webhook.** AT POSTs `application/x-www-form-urlencoded` here.
+        Response is `text/plain` starting with `CON ` (more input expected)
+        or `END ` (session over). Useful for local testing — the same
+        endpoint backs `/ussd-simulator.html`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema: { $ref: '#/components/schemas/UssdBody' }
+            examples:
+              start:
+                summary: Initial dial (empty text)
+                value:
+                  sessionId: sim-1
+                  serviceCode: '*928#'
+                  phoneNumber: '+233244111222'
+                  text: ''
+              convulsions:
+                summary: English then convulsions (full breadcrumb)
+                value:
+                  sessionId: sim-2
+                  serviceCode: '*928#'
+                  phoneNumber: '+233244111222'
+                  text: '1*3'
+      responses:
+        '200':
+          description: USSD reply.
+          content:
+            text/plain:
+              schema: { type: string }
+              examples:
+                con:
+                  summary: Continue
+                  value: 'CON Select language:\n1. English\n2. Twi\n3. Dagbani\n4. Ewe'
+                end:
+                  summary: End of session
+                  value: 'END This may be a life-threatening emergency. Please go to a hospital immediately. A health worker has been alerted.'
+
+  /ussd/status:
+    post:
+      tags: [USSD]
+      summary: AT end-of-session status callback
+      description: AT POSTs `date / sessionId / status / cost / duration / input`. Logged + 200.
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Acknowledged.
+
+  # ----- Voice (webhook) -----
+  /voice:
+    post:
+      tags: [Voice]
+      summary: Africa's Talking Voice callback
+      description: |
+        **Webhook.** AT POSTs `application/x-www-form-urlencoded` here.
+        Response is `application/xml` containing `<Response>` with one or
+        more actions (`<Say>`, `<Play>`, `<GetDigits>`, `<Dial>`). Backs
+        `/voice-simulator.html`.
+
+        On HIGH/EMERGENCY the response includes `<Dial phoneNumbers="…">`
+        sourced from `ESCALATION_CHW_PHONES` — the live call is bridged
+        to the on-call CHW.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema: { $ref: '#/components/schemas/VoiceBody' }
+            examples:
+              initial:
+                summary: Initial dial (no dtmf)
+                value:
+                  sessionId: voice-1
+                  callerNumber: '+233244111222'
+                  dtmf: ''
+              langPick:
+                summary: Pick English (dtmf=1)
+                value:
+                  sessionId: voice-1
+                  callerNumber: '+233244111222'
+                  dtmf: '1'
+              convulsions:
+                summary: After lang, press convulsions (dtmf=3)
+                value:
+                  sessionId: voice-1
+                  callerNumber: '+233244111222'
+                  dtmf: '3'
+      responses:
+        '200':
+          description: Voice XML response.
+          content:
+            application/xml:
+              schema: { type: string }
+              examples:
+                emergencyBridge:
+                  value: |
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <Response><Say voice="woman">This may be serious. Please stay on the line. Connecting you to a health worker now.</Say><Dial phoneNumbers="+233543873005" record="true" maxDuration="600"/></Response>
+
+  /voice/status:
+    post:
+      tags: [Voice]
+      summary: AT end-of-call status callback
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Acknowledged.
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Unauthorized:
+      description: Missing or invalid token.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Forbidden:
+      description: Authenticated but not allowed for this role.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Conflict:
+      description: Conflict with current state (e.g. email already in use).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    ValidationError:
+      description: Zod schema rejected the body or query.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+  schemas:
+    # ----- Enums -----
+    Role:
+      type: string
+      enum: [PATIENT, CHW, DHO, ADMIN]
+    Lang:
+      type: string
+      enum: [en, tw, dag, ee]
+      description: API-facing language code (lowercased; Prisma enum is uppercased).
+    RiskLevel:
+      type: string
+      enum: [LOW, MEDIUM, HIGH, EMERGENCY]
+    Channel:
+      type: string
+      enum: [WEB, USSD, VOICE]
+    AlertStatus:
+      type: string
+      enum: [OPEN, ACKNOWLEDGED, RESOLVED]
+    NotificationStatus:
+      type: string
+      enum: [QUEUED, SENT, FAILED]
+    NotificationChannel:
+      type: string
+      enum: [SMS, VOICE, EMAIL]
+
+    # ----- Core domain -----
+    User:
+      type: object
+      required: [id, role, createdAt]
+      properties:
+        id: { type: string }
+        email: { type: string, format: email, nullable: true }
+        fullName: { type: string, nullable: true }
+        phone:
+          type: string
+          nullable: true
+          description: E.164 (Ghana +233…). Normalized server-side.
+        role: { $ref: '#/components/schemas/Role' }
+        createdAt: { type: string, format: date-time }
+
+    PatientProfile:
+      type: object
+      required: [id, updatedAt]
+      properties:
+        id: { type: string, description: 'Patient.id (NOT User.id).' }
+        district: { type: string, nullable: true }
+        gestationalWeeks: { type: integer, minimum: 0, maximum: 44, nullable: true }
+        lastMenstrualPeriod: { type: string, format: date-time, nullable: true }
+        dueDate: { type: string, format: date-time, nullable: true }
+        parity: { type: integer, minimum: 0, maximum: 20, nullable: true }
+        gravida: { type: integer, minimum: 0, maximum: 20, nullable: true }
+        bloodGroup: { type: string, nullable: true }
+        updatedAt: { type: string, format: date-time }
+
+    PatientWithUser:
+      type: object
+      required: [user, patient]
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        patient:
+          oneOf:
+            - { $ref: '#/components/schemas/PatientProfile' }
+            - { type: 'null' }
+
+    SymptomInput:
+      type: object
+      description: All fields optional — a payload with no symptoms is valid and returns LOW.
+      properties:
+        bleeding: { type: boolean }
+        severeHeadache: { type: boolean }
+        blurredVision: { type: boolean }
+        reducedFetalMovement: { type: boolean }
+        highBloodPressure: { type: boolean }
+        feverChills: { type: boolean }
+        swellingFaceHands: { type: boolean }
+        convulsions: { type: boolean }
+        gestationalWeeks: { type: integer, minimum: 0, maximum: 44 }
+        lang: { $ref: '#/components/schemas/Lang' }
+
+    RiskResult:
+      type: object
+      required: [level, reasons, recommendation, escalate]
+      properties:
+        level: { $ref: '#/components/schemas/RiskLevel' }
+        reasons:
+          type: array
+          items: { type: string }
+          description: Language-neutral rule keys (e.g. CONVULSIONS, NO_DANGER_SIGNS).
+        recommendation:
+          type: string
+          description: Localized clinical guidance — render verbatim, do not paraphrase.
+        escalate: { type: boolean }
+
+    Alert:
+      type: object
+      required: [id, level, status, patientId, riskAssessmentId, createdAt, patient, riskAssessment]
+      properties:
+        id: { type: string }
+        level: { $ref: '#/components/schemas/RiskLevel' }
+        status: { $ref: '#/components/schemas/AlertStatus' }
+        patientId: { type: string }
+        riskAssessmentId: { type: string }
+        acknowledgedAt: { type: string, format: date-time, nullable: true }
+        acknowledgedById: { type: string, nullable: true }
+        resolvedAt: { type: string, format: date-time, nullable: true }
+        resolvedById: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        patient:
+          type: object
+          required: [userId]
+          properties:
+            userId: { type: string }
+            fullName: { type: string, nullable: true }
+            phone: { type: string, nullable: true }
+            district: { type: string, nullable: true }
+        riskAssessment:
+          type: object
+          required: [level, reasons, recommendation, createdAt]
+          properties:
+            level: { $ref: '#/components/schemas/RiskLevel' }
+            reasons:
+              type: array
+              items: { type: string }
+            recommendation: { type: string }
+            createdAt: { type: string, format: date-time }
+
+    Notification:
+      type: object
+      required: [id, to, body, channel, status, createdAt]
+      properties:
+        id: { type: string }
+        to: { type: string, description: E.164 phone or email — depends on channel. }
+        body: { type: string }
+        channel: { $ref: '#/components/schemas/NotificationChannel' }
+        status: { $ref: '#/components/schemas/NotificationStatus' }
+        alertId: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        sentAt: { type: string, format: date-time, nullable: true }
+
+    # ----- Request bodies -----
+    RegisterBody:
+      type: object
+      required: [email, password, fullName]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+        fullName: { type: string, minLength: 1, maxLength: 120 }
+        phone:
+          type: string
+          description: Any Ghana format accepted — server normalizes to +233XXXXXXXXX.
+          minLength: 7
+          maxLength: 20
+
+    LoginBody:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 1 }
+
+    UpsertPatientBody:
+      type: object
+      description: All fields optional — undefined means "leave unchanged."
+      properties:
+        district: { type: string, minLength: 1, maxLength: 80 }
+        gestationalWeeks: { type: integer, minimum: 0, maximum: 44 }
+        lastMenstrualPeriod: { type: string, format: date-time }
+        dueDate: { type: string, format: date-time }
+        parity: { type: integer, minimum: 0, maximum: 20 }
+        gravida: { type: integer, minimum: 0, maximum: 20 }
+        bloodGroup: { type: string, minLength: 1, maxLength: 5 }
+
+    RiskCheckBody:
+      type: object
+      required: [symptoms]
+      properties:
+        patientId:
+          type: string
+          description: Required for CHW/ADMIN; ignored for PATIENT (always acts on self).
+        symptoms: { $ref: '#/components/schemas/SymptomInput' }
+
+    PatchAlertBody:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [acknowledge, resolve]
+
+    UssdBody:
+      type: object
+      required: [sessionId, phoneNumber]
+      properties:
+        sessionId: { type: string, description: AT-issued per call. }
+        serviceCode: { type: string, example: '*928#' }
+        phoneNumber: { type: string, description: Caller MSISDN in E.164. }
+        text:
+          type: string
+          description: |
+            Cumulative breadcrumb of digits separated by `*`. Empty on
+            initial dial; `"1"` after first press; `"1*3"` after two; etc.
+
+    VoiceBody:
+      type: object
+      required: [sessionId, callerNumber]
+      properties:
+        sessionId: { type: string }
+        callerNumber: { type: string }
+        direction: { type: string, description: 'Inbound | Outbound (AT-supplied).' }
+        dtmf:
+          type: string
+          description: |
+            Last single keypress, NOT cumulative (unlike USSD `text`).
+            Empty on initial ring.
+        dtmfDigits:
+          type: string
+          description: Synonym for `dtmf` — some AT SDK versions use this field name.
+
+    # ----- Errors -----
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, code]
+          properties:
+            message: { type: string }
+            code:
+              type: string
+              enum:
+                - BAD_REQUEST
+                - UNAUTHORIZED
+                - FORBIDDEN
+                - NOT_FOUND
+                - CONFLICT
+                - VALIDATION_ERROR
+                - INTERNAL
+            details:
+              description: Optional structured detail — e.g. Zod fieldErrors map.
+
+    AuthSuccess:
+      type: object
+      required: [user, token]
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        token: { type: string, description: JWT — pass as `Bearer <token>`. }
+
+# Apply Bearer JWT globally; individual endpoints opt out via `security: []`.
+security:
+  - bearerAuth: []
