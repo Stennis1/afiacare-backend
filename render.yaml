@@ -1,0 +1,63 @@
+# Render Blueprint — demo deploy of the AfiaCare backend.
+#
+# Spins up:
+#   1. A free Node web service (Express + Prisma + TypeScript)
+#   2. A free managed Postgres
+#   3. Wired-up env vars (DATABASE_URL auto-linked; JWT_SECRET auto-generated;
+#      ESCALATION_CHW_PHONES left blank for you to set in the dashboard).
+#
+# Why "free": demo-only. Free tier has two real limitations to know about:
+#   - Web service sleeps after 15 min idle (~30s cold start on next hit).
+#   - Postgres expires AFTER 90 DAYS — Render auto-deletes it. Renew or
+#     upgrade before that if the demo needs to stick around.
+#
+# Region: frankfurt is geographically closest to Ghana on Render's free
+# tier (~150ms RTT from Accra vs ~250ms+ for US regions).
+#
+# How to deploy:
+#   See docs/DEPLOY.md for the 8-step runbook.
+
+services:
+  - type: web
+    name: afiacare-backend
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: main
+    # --include=dev keeps tsx + prisma CLI available so the post-deploy
+    # `npm run db:seed` works from the Render Shell. The dev-deps footprint
+    # is negligible at this size; trim it later for prod if needed.
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build
+    # `prisma migrate deploy` is idempotent — safe to run on every cold
+    # start. Adds ~2s to boot but means schema is always current.
+    startCommand: npx prisma migrate deploy && npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # PORT is set by Render automatically — env.ts reads it via env.PORT,
+      # do NOT hardcode a value here.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: afiacare-db
+          property: connectionString
+      # generateValue=true: Render makes a strong random string and stores
+      # it as a secret. JWTs signed in dev will NOT validate in prod (good).
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      # sync=false: NOT mirrored across Render environments and NOT shown
+      # in the Blueprint preview. You set this manually in the dashboard
+      # after first deploy — paste your phone (E.164, comma-separated for
+      # multiple). Leave blank to deploy without the SMS/<Dial> path armed.
+      - key: ESCALATION_CHW_PHONES
+        sync: false
+
+databases:
+  - name: afiacare-db
+    plan: free
+    region: frankfurt
+    databaseName: afiacare
+    user: afiacare
