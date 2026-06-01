@@ -39,21 +39,49 @@ const EN_TEMPLATES: Record<RiskLevel, string> = {
     'No urgent danger signs were reported. Continue your regular antenatal visits and call back if anything changes.',
 };
 
-function stubFor(langTag: string): Record<RiskLevel, string> {
-  const marker = `[${langTag} — needs native-speaker translation]`;
-  return {
-    EMERGENCY: `${marker} ${EN_TEMPLATES.EMERGENCY}`,
-    HIGH: `${marker} ${EN_TEMPLATES.HIGH}`,
-    MEDIUM: `${marker} ${EN_TEMPLATES.MEDIUM}`,
-    LOW: `${marker} ${EN_TEMPLATES.LOW}`,
-  };
-}
+// Twi — demo translations. Per §11.2 a mistranslated danger-sign instruction
+// is a real-world harm, not a cosmetic bug. These MUST be reviewed by a
+// native Twi-speaking clinician before any non-demo use.
+const TW_TEMPLATES: Record<RiskLevel, string> = {
+  EMERGENCY:
+    'Eyi betumi ayɛ tebea a ɛde nkwa to asiane mu. Kɔ ayaresabea ntɛm ara. Wɔabɔ apɔmuden adwumayɛni amanneɛ.',
+  HIGH:
+    'Wowɔ nsɛnkyerɛnne a ɛhwehwɛ ntɛm mmoa. Kɔ ayaresabea anaa clinic nnɛ. Wɔabɔ apɔmuden adwumayɛni amanneɛ.',
+  MEDIUM:
+    'Wowɔ yareɛ ho nsɛnkyerɛnne a ɛsɛ sɛ apɔmuden adwumayɛni hwɛ ntɛm. Kɔ clinic no wɔ da a ɛdi hɔ no mu.',
+  LOW:
+    'Wɔanhu asiane ho nsɛnkyerɛnne biara a ɛhia ntɛm mmoa. Toa wo awo ansa na awoɔ nhwehwɛmu ahorow no so na sɛ biribi sesa a, san frɛ bio.',
+};
+
+// Ewe — same demo-only / clinician-review requirement as Twi.
+const EE_TEMPLATES: Record<RiskLevel, string> = {
+  EMERGENCY:
+    'Esia ate ŋu anye nɔnɔme si ado ŋuwò ƒe agbe le afɔku me. Taflatse yi dɔyɔƒe enumake. Woɖo aɖaŋu na lãmesẽdɔwɔla aɖe.',
+  HIGH:
+    'Èle dzesiwo siwo hia kpɔkpɔ enumake la nu. Taflatse yi klinik la egbea. Woɖo aɖaŋu na lãmesẽdɔwɔla aɖe.',
+  MEDIUM:
+    'Èle nudzɔdzɔwo siwo hia be lãmesẽdɔwɔla nakpɔ kpuie la nu. Taflatse yi klinik la le ŋkeke si gbɔna me.',
+  LOW:
+    'Mede dzesi vɔ̃ɖi aɖeke si hia mɔɖeɖe enumake o. Yi edzi kple wò fuƒoƒo ƒe dokita kpɔkpɔwo eye ne nane trɔ la, gblɔ ake.',
+};
+
+// Dagbani — same demo-only / clinician-review requirement as Twi/Ewe.
+const DAG_TEMPLATES: Record<RiskLevel, string> = {
+  EMERGENCY:
+    'Nya ŋɔ ka ŋun nyɛla mɔɣu ka nyɛ a sihim. Gahim ka di hospital ni yuun. Ti kpɛri laafee tuuntua yili.',
+  HIGH:
+    'A ni mali yoli ni bɔhigu ka hia pam. Gahim ka di clinic ni din. Ti kpɛri laafee tuuntua yili.',
+  MEDIUM:
+    'A ni yoli ni hia ka laafee tuuntua kpɛri. Gahim ka di clinic ni zaa din yuun.',
+  LOW:
+    'Ti ka nyɛ yoli ni bɔhigu ka hia pam o. Kpɛli ka mali a puuni laafee kpɛrim ni. Nya ka mali, mali biɛla.',
+};
 
 const TEMPLATES: Record<Language, Record<RiskLevel, string>> = {
   [Language.EN]: EN_TEMPLATES,
-  [Language.TW]: stubFor('TW'),
-  [Language.DAG]: stubFor('DAG'),
-  [Language.EE]: stubFor('EE'),
+  [Language.TW]: TW_TEMPLATES,
+  [Language.DAG]: DAG_TEMPLATES,
+  [Language.EE]: EE_TEMPLATES,
 };
 
 export function renderRecommendation(level: RiskLevel, lang: Language): string {
