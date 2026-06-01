@@ -56,12 +56,17 @@ Watch the build log in the web service's "Logs" tab. Success looks like:
 ==> Running 'npm ci --include=dev && npx prisma generate && npm run build'
 …
 ==> Build successful 🎉
-==> Running 'npx prisma migrate deploy && npm start'
+==> Running 'npx prisma migrate deploy && npm run db:seed && npm start'
 Prisma schema loaded from prisma/schema.prisma
 1 migration found in prisma/migrations
 Applying migration `20260526164842_init`
 The following migration(s) have been applied:
 …
+  [ok] CHW     chw@afiacare.demo
+  [ok] DHO     dho@afiacare.demo
+  [ok] ADMIN   admin@afiacare.demo
+
+Demo password for all seeded users: afiacare-demo
 [afiacare] listening on http://localhost:10000 (production)
 ==> Your service is live 🎉
 ```
@@ -86,23 +91,24 @@ will be queued.
 
 ---
 
-## 5. Seed demo accounts — 2 min
+## 5. Demo accounts — already seeded
 
-1. Web service dashboard → **Shell** tab.
-2. Run:
-   ```bash
-   npm run db:seed
-   ```
-3. Expected output:
-   ```
-   [ok] CHW     chw@afiacare.demo
-   [ok] DHO     dho@afiacare.demo
-   [ok] ADMIN   admin@afiacare.demo
-   Demo password for all seeded users: afiacare-demo
-   ```
+The `startCommand` chains `npm run db:seed` between
+`prisma migrate deploy` and `npm start`, so CHW / DHO / ADMIN logins
+exist the moment the service goes live. Nothing to click.
 
-The seed uses `upsert`, so re-running it is safe — it won't create
-duplicates.
+Demo logins (password is the same for all three: **`afiacare-demo`**):
+- `chw@afiacare.demo`
+- `dho@afiacare.demo`
+- `admin@afiacare.demo`
+
+The seed uses `upsert`, so re-running on every cold start is a no-op
+for existing rows. If you ever want to verify the seed ran (or rerun
+after manually editing `prisma/seed.ts`), the Render Shell still works:
+
+```bash
+npm run db:seed
+```
 
 ---
 
@@ -146,7 +152,8 @@ start). Subsequent requests are instant.
 | Boot loops with `JWT_SECRET must be at least 32 characters` | Render didn't generate the secret | Env tab → delete `JWT_SECRET` → click Save → it regenerates on next deploy. |
 | `prisma migrate deploy` fails with "no migrations found" | First deploy before `prisma/migrations/` was committed | Verify `prisma/migrations/20260526164842_init/` is on the deployed branch. |
 | 502 / "Bad Gateway" right after deploy | Service still cold-starting | Wait 30s and retry. |
-| `npm run db:seed` says "command not found: tsx" | Dev deps not installed | Confirm `buildCommand` includes `--include=dev` in `render.yaml`. |
+| Boot fails on `npm run db:seed` with "command not found: tsx" | Dev deps not installed | Confirm `buildCommand` includes `--include=dev` in `render.yaml`. |
+| Login as `chw@afiacare.demo` returns 401 | Seed step didn't run (boot log skipped past it) or DB was reset | Render Shell → `npm run db:seed`; check boot log for the `[ok] CHW …` line on next deploy. |
 | All POSTs fail with CORS errors from the frontend | `cors()` is open by default, so this shouldn't happen — but if you tightened it, allow the Vercel origin |
 
 ---

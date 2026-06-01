@@ -24,13 +24,20 @@ services:
     plan: free
     region: frankfurt
     branch: main
-    # --include=dev keeps tsx + prisma CLI available so the post-deploy
-    # `npm run db:seed` works from the Render Shell. The dev-deps footprint
-    # is negligible at this size; trim it later for prod if needed.
+    # --include=dev keeps tsx + prisma CLI available so the boot-time
+    # `npm run db:seed` (chained into startCommand below) works. The
+    # dev-deps footprint is negligible at this size; trim it later for
+    # prod if needed.
     buildCommand: npm ci --include=dev && npx prisma generate && npm run build
-    # `prisma migrate deploy` is idempotent — safe to run on every cold
-    # start. Adds ~2s to boot but means schema is always current.
-    startCommand: npx prisma migrate deploy && npm start
+    # Both `prisma migrate deploy` and `npm run db:seed` are idempotent
+    # (the seed uses upsert), so chaining them into every cold start is
+    # safe — schema stays current and demo CHW/DHO/ADMIN logins exist as
+    # soon as the service is live, no manual Shell step required.
+    # Adds ~3s to boot.
+    # WARNING: if a future seed becomes destructive (resets a table,
+    # deletes rows), running it on every boot would wipe data. Keep
+    # prisma/seed.ts upsert-only.
+    startCommand: npx prisma migrate deploy && npm run db:seed && npm start
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
